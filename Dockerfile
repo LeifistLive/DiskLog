@@ -12,8 +12,16 @@ RUN python -m py_compile /app/monitor.py
 
 # The process must run as root: entering the host mount namespace, chrooting
 # into it, and mount-wide fanotify marks all require it. There is no
-# unprivileged user to drop to here - see compose.yaml and README.md for
+# unprivileged user to drop to here - see docker-compose.yml and README.md for
 # what that means for host filesystem access.
 USER root
+
+# Runtime default working directory - deliberately not /app. Once monitor.py
+# does its setns()+chroot() dance, any later process exec'd into this
+# container (docker exec, HEALTHCHECK) is rooted at the Unraid host's own
+# filesystem, not this image's rootfs - /app only exists in the image, never
+# on the host, so a freshly exec'd process starting with cwd=/app would fail
+# before it even runs anything. "/" exists everywhere.
+WORKDIR /
 
 ENTRYPOINT ["python", "-u", "/app/monitor.py"]

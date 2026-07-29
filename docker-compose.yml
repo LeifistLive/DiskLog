@@ -69,13 +69,22 @@ services:
     volumes:
       - /mnt/user/appdata/disk-access-monitor/data:/data
 
+    # This check runs as a freshly exec'd process (like `docker exec`).
+    # Because monitor.py's setns()+chroot() makes any *later* exec land in
+    # the Unraid host's own filesystem rather than this image's rootfs, it
+    # can't rely on python (unlikely to be installed on the bare host) or
+    # on /data (only exists inside this image, never on the host) - it
+    # checks the real host path with plain sh/test/date/stat instead. Every
+    # $ below is doubled ($$) because Compose itself interpolates single $
+    # in this file; $$ survives as a literal $ for the container's shell to
+    # expand at runtime.
     healthcheck:
       test:
         - CMD-SHELL
         - >-
-          python -c "import json,time;
-          d=json.load(open('/data/status.json'));
-          raise SystemExit(0 if time.time()-d['updated_epoch'] < 90 else 1)"
+          test -f /mnt/user/appdata/disk-access-monitor/data/status.json &&
+          test $$(( $$(date +%s) - $$(stat -c %Y
+          /mnt/user/appdata/disk-access-monitor/data/status.json) )) -lt 90
       interval: 30s
       timeout: 5s
       retries: 3

@@ -23,6 +23,21 @@ to the data directory (`events.jsonl`, `status.json`) — everything else
 opened read-only. The image is also built locally from the `Dockerfile` in
 this repo, not pulled from a registry.
 
+### `docker exec` also lands on the host, not in this image
+
+Confirmed on real hardware: once the main process has done its
+`setns()`/`chroot()`, any *later* process started inside this container
+(`docker exec`, the `HEALTHCHECK` below) ends up rooted at the Unraid host's
+own filesystem too — not this image's rootfs. Docker's exec mechanism joins
+whatever mount namespace/root the container's tracked process is *currently*
+in, read live from `/proc/<pid>/root`, and by the time anything gets exec'd
+that's the host, not the image. Practically: `/app` (this image's `WORKDIR`)
+does not exist there, and neither does `python` unless the host happens to
+have it installed. That's why the healthcheck below only uses `sh`/`test`/
+`date`/`stat` against the real host path, and why `docker exec -it
+disk-access-monitor sh` for debugging will drop you into the *Unraid host*,
+not a sandboxed container - anything you run there runs on the host.
+
 ## CI
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on every push and
@@ -52,7 +67,7 @@ pytest -v
 3. In Portainer: **Stacks → Add stack → Repository**.
    - Repository URL: `https://github.com/<you>/<repo>.git`
    - Reference: `refs/heads/main` (or whichever branch)
-   - Compose path: `compose.yaml`
+   - Compose path: `docker-compose.yml`
 4. Deploy the stack. Portainer clones the repo and runs
    `docker compose up -d --build`, so the image is built locally from the
    `Dockerfile` in this repo — nothing needs to be pushed to a registry.
@@ -65,7 +80,7 @@ pytest -v
 ```bash
 mkdir -p /mnt/user/appdata/disk-access-monitor/data
 cd /mnt/user/appdata/disk-access-monitor
-# Put compose.yaml, Dockerfile and monitor.py in this directory.
+# Put docker-compose.yml, Dockerfile and monitor.py in this directory.
 docker compose up -d --build
 ```
 
