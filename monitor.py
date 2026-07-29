@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import heapq  # noqa: F401 - see note below, do not remove
 import json
 import os
 import re
@@ -40,6 +41,17 @@ from collections import Counter, deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+# heapq is never called directly in this file, but Counter.most_common(n)
+# (used in summarize_events()) imports it lazily on first use. By the time
+# that first happens (the first completed spin-up report), this process has
+# already setns()+chroot()'d into the host root (see
+# enter_host_mount_namespace()), so Python's import machinery would search
+# the *host's* filesystem for heapq.py and fail with ModuleNotFoundError -
+# confirmed in production. Importing it here, before the chroot, caches it
+# in sys.modules so the later lazy import inside collections is a no-op.
+# The same risk applies to any other stdlib module imported for the first
+# time after the chroot; see main()'s exception handler.
 
 
 # Linux namespace / fanotify constants.
@@ -74,6 +86,7 @@ FANOTIFY_METADATA_VERSION = 3
 
 DISKS_INI = Path("/var/local/emhttp/disks.ini")
 VAR_INI = Path("/var/local/emhttp/var.ini")
+CONTAINERS_ROOT = Path("/var/lib/docker/containers")
 DATA_DIR = Path("/data")
 EVENTS_FILE = DATA_DIR / "events.jsonl"
 STATUS_FILE = DATA_DIR / "status.json"
@@ -358,17 +371,23 @@ class HostFanotifyMonitor:
             return cached[1]
 
         name: str | None = None
-        containers_root = Path("/var/lib/docker/containers")
         candidates: list[Path] = []
 
-        exact = containers_root / container_id / "config.v2.json"
+        exact = CONTAINERS_ROOT / container_id / "config.v2.json"
         if exact.exists():
             candidates = [exact]
         else:
+            # A plain prefix scan instead of Path.glob(): glob() pulls in
+            # fnmatch on first use, which is one more lazily-imported stdlib
+            # module that would break post-chroot (see the heapq import
+            # note above) for no real benefit here - it's a fixed prefix
+            # match, not a pattern.
             try:
-                candidates = list(
-                    containers_root.glob(f"{container_id}*/config.v2.json")
-                )[:2]
+                candidates = [
+                    CONTAINERS_ROOT / entry / "config.v2.json"
+                    for entry in os.listdir(CONTAINERS_ROOT)
+                    if entry.startswith(container_id)
+                ][:2]
             except OSError:
                 candidates = []
 
@@ -813,6 +832,19 @@ def main() -> int:
         return 0
     except MonitorError as exc:
         print(f"FATAL: {exc}", file=sys.stderr, flush=True)
+        return 1
+    except ModuleNotFoundError as exc:
+        print(
+            f"FATAL unexpected error: {exc!r} - this is likely a stdlib "
+            "module imported for the first time (e.g. via a stdlib "
+            "function's own lazy import) after "
+            "enter_host_mount_namespace()'s setns()+chroot(); Python then "
+            "searches the *host* filesystem for it instead of this image's. "
+            "Fix: add an eager `import <module>` near the top of "
+            "monitor.py, alongside the existing `import heapq` note.",
+            file=sys.stderr,
+            flush=True,
+        )
         return 1
     except Exception as exc:
         print(f"FATAL unexpected error: {exc!r}", file=sys.stderr, flush=True)

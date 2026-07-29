@@ -94,6 +94,35 @@ def test_extract_container_id_no_match():
     assert monitor.HostFanotifyMonitor.extract_container_id("0::/") is None
 
 
+def test_heapq_is_eagerly_imported():
+    # Guards against someone "cleaning up" this apparently-unused import:
+    # collections.Counter.most_common(n) imports heapq lazily on first use,
+    # which crashes with ModuleNotFoundError once monitor.py has chroot'd
+    # into the host root (confirmed in production) unless heapq is already
+    # cached in sys.modules beforehand. See the comment in monitor.py.
+    assert hasattr(monitor, "heapq")
+
+
+def test_container_name_matches_by_short_id_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(monitor, "CONTAINERS_ROOT", tmp_path)
+    full_id = "b" * 64
+    container_dir = tmp_path / full_id
+    container_dir.mkdir()
+    (container_dir / "config.v2.json").write_text('{"Name": "/plex"}')
+
+    mon = monitor.HostFanotifyMonitor()
+    short_id = full_id[:12]
+
+    assert mon.container_name(short_id) == "plex"
+
+
+def test_container_name_no_match_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(monitor, "CONTAINERS_ROOT", tmp_path)
+    mon = monitor.HostFanotifyMonitor()
+
+    assert mon.container_name("deadbeef0000") is None
+
+
 def test_parse_ini_sections(tmp_path):
     ini_file = tmp_path / "disks.ini"
     ini_file.write_text(
