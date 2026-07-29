@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# runtime data (lives on the host under /mnt/user/appdata/..., not in the repo)
+data/
+*.jsonl
+status.json
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

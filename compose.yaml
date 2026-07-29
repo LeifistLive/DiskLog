@@ -1,0 +1,82 @@
+services:
+  disk-access-monitor:
+    container_name: disk-access-monitor
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local/disk-access-monitor:1.0
+    restart: unless-stopped
+
+    # Required to correlate fanotify PIDs with host processes and to enter
+    # the Unraid host mount namespace (setns + chroot into /proc/1/root, see
+    # monitor.py). Once that chroot happens, the process is operating with
+    # host-root-equivalent filesystem access as far as the kernel is
+    # concerned - read_only/tmpfs/cap_add below only constrain what happens
+    # in the container's own original mount namespace before that point.
+    #
+    # SYS_ADMIN:  setns(CLONE_NEWNS) to join the host mount namespace.
+    # SYS_CHROOT: chroot() into /proc/1/root (already in Docker's default
+    #             capability set even without this line - listed explicitly
+    #             so the actual requirements are self-documenting here).
+    # DAC_READ_SEARCH: read host files/dirs the container's own uid/gid
+    #             wouldn't otherwise have permission for.
+    # SYS_PTRACE: NOT needed for setns()/chroot() themselves. It may be
+    #             needed to dereference /proc/1/root at all, or to read
+    #             /proc/<pid>/{comm,cmdline,cgroup} of unrelated host
+    #             processes - both go through a ptrace access-mode check
+    #             that depends on the host's kernel.yama.ptrace_scope
+    #             sysctl. Untested here without a real Unraid host; to
+    #             check if it can be dropped, remove it, redeploy, and
+    #             confirm `docker logs -f disk-access-monitor` still shows
+    #             correct process/command/container attribution while
+    #             triggering access from a few different containers.
+    pid: host
+    cap_add:
+      - SYS_ADMIN
+      - SYS_CHROOT
+      - DAC_READ_SEARCH
+      - SYS_PTRACE
+
+    security_opt:
+      - no-new-privileges:true
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+
+    environment:
+      TZ: Europe/Berlin
+
+      # Empty = automatically monitor disk1, disk2, ...
+      # Example: disk1,disk2,disk3
+      WATCH_DISKS: ""
+
+      POLL_INTERVAL: "0.5"
+      SECONDS_BEFORE: "12"
+      SECONDS_AFTER: "3"
+      COOLDOWN_SECONDS: "120"
+      MAX_EVENTS: "10000"
+      MAX_PROCESSES: "8"
+      MAX_PATHS: "8"
+      LOG_FULL_PATHS: "false"
+      WRITE_SYSLOG: "true"
+
+      # Rotate events.jsonl once it reaches this size, keeping this many
+      # backups (events.jsonl.1 .. .N). 0 backups just truncates it.
+      EVENTS_MAX_BYTES: "26214400"
+      EVENTS_BACKUP_COUNT: "3"
+
+    volumes:
+      - /mnt/user/appdata/disk-access-monitor/data:/data
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import json,time;
+          d=json.load(open('/data/status.json'));
+          raise SystemExit(0 if time.time()-d['updated_epoch'] < 90 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
