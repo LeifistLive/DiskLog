@@ -52,9 +52,9 @@ services:
       WATCH_DISKS: ""
 
       POLL_INTERVAL: "0.5"
-      SECONDS_BEFORE: "12"
+      SECONDS_BEFORE: "30"
       SECONDS_AFTER: "3"
-      COOLDOWN_SECONDS: "120"
+      COOLDOWN_SECONDS: "60"
       MAX_EVENTS: "10000"
       MAX_PROCESSES: "8"
       MAX_PATHS: "8"
